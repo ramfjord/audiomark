@@ -16,7 +16,7 @@
 int		debug = 1;
 watermark	*w;
 
-void parse_config(char *config_path){
+int parse_config(char *config_path){
 /*{{{*/
   FILE *config;
   if(config = fopen(config_path, "r")){
@@ -41,18 +41,22 @@ void parse_config(char *config_path){
       }
 
       else if(strncmp(read_buffer, "alpha ", strlen("alpha ")) == 0){
-	sscanf(read_buffer, "alpha %lf", &(w->alpha));
+	if(EOF == sscanf(read_buffer, "alpha %lf", &(w->alpha)))
+	  return ERROR;
       }
 
       else if(strncmp(read_buffer, "schema ", strlen("schema ")) == 0){
-	w->schema = get_schema((read_buffer + strlen("schema ")));
+	if(ERROR == (w->schema = get_schema((read_buffer + strlen("schema ")))))
+	  return ERROR;
       }
 
       else if(strncmp(read_buffer, "seed ", strlen("seed ")) == 0){
-	sscanf(read_buffer, "seed %d", &(w->key_seed));
+	if(EOF == sscanf(read_buffer, "seed %d", &(w->key_seed)))
+	  return ERROR;
       }
       else if(strncmp(read_buffer, "processing_gain ", strlen("processing_gain ")) == 0){
-	sscanf(read_buffer, "processing_gain %d", &(w->processing_gain));
+	if(EOF == sscanf(read_buffer, "processing_gain %d", &(w->processing_gain)))
+	  return ERROR;
       }
 
       else if(strncmp(read_buffer, "type ", strlen("type ")) == 0){
@@ -67,26 +71,50 @@ void parse_config(char *config_path){
 /*}}}*/
 }
 
+//
+// Get's schema info from a string
+//
+int get_schema(char *s){
+/*{{{*/
+  if(strstr(s, "plus"))
+    w->schema = PLUS_SCHEMA;
+  else if(strstr(s, "mult"))
+    w->schema = MULT_SCHEMA;
+  else if(strstr(s, "powr"))
+    w->schema = POWR_SCHEMA;
+  else{
+    fprintf(stderr, "Invalid Schema: the valid schemas are plus, mult, and powr. \n");
+    fprintf(stderr, "plus: v'_i = v_i+aw_i\n");
+    fprintf(stderr, "mult: v'_i = v_i(1+aw_i)\n");
+    fprintf(stderr, "powr: v'_i = v_i(e*a^w_i)\n");
+    return ERROR;
+  }
+  return w->schema;
+/*}}}*/
+}
+
 void print_watermark_info(){
 /*{{{*/
-  printf("watermark: >%s<\n",w->w_message);
-  printf("len (real %d), %d\n", strlen(w->w_message), w->w_len);
-  printf("alpha: %lf\n",w->alpha);
-  printf("schema: %d\n",w->schema);
-  printf("key_seed: %u\n",w->key_seed);
-  printf("processing_gain: %d\n", w->processing_gain);
-  printf("type = %s\n", (w->type == FH_EMBED) ? "fh" : "ss");
+  printf("watermark info:\n");
+  printf("\twatermark: >%s<\n",w->w_message);
+  printf("\tlen (real %d), %d\n", strlen(w->w_message), w->w_len);
+  printf("\talpha: %lf\n",w->alpha);
+  printf("\tschema: %d\n",w->schema);
+  printf("\tkey_seed: %u\n",w->key_seed);
+  printf("\tprocessing_gain: %d\n", w->processing_gain);
+  printf("\ttype = %s\n", (w->type == FH_EMBED) ? "fh" : "ss");
 /*}}}*/
 }
 
 void print_sfile_info(SF_INFO sfinfo){
 /*{{{*/
-  printf("samplerate: %d\n", sfinfo.samplerate);
-  printf("channels: %d\n", sfinfo.channels);
-  printf("sections: %d\n", sfinfo.sections);
-  printf("format: %d\n", sfinfo.format);
-  printf("frames: %d\n", (int)sfinfo.frames);
-  printf("seekable: %d\n", sfinfo.seekable);
+  printf("sound file info:\n");
+  printf("\tsamplerate: %d\n", sfinfo.samplerate);
+  printf("\tchannels: %d\n", sfinfo.channels);
+  printf("\tsections: %d\n", sfinfo.sections);
+  printf("\tformat: %d\n", sfinfo.format);
+  printf("\tframes: %d\n", (int)sfinfo.frames);
+  printf("\tseekable: %d\n", sfinfo.seekable);
 /*}}}*/
 }
 
@@ -158,6 +186,10 @@ double rand_double(){
   return (double)rand() / (double)RAND_MAX;
 }
 
+//
+// Generates an array of noise in buffer
+// this is a random sequence of positive/negative elements of magnitude NOISE_FACTOR
+//
 void generate_noise(double *buffer, int buffer_len){
 /*{{{*/
   for(int i = 0; i < buffer_len; i++){
@@ -168,6 +200,10 @@ void generate_noise(double *buffer, int buffer_len){
 /*}}}*/
 }
 
+// 
+// Goes through each bit in wmark
+// flips bits in noise_seq if the current watermark bit is 0
+//
 void embed_to_noise(char *wmark, double *noise_seq, int buffer_len){
 /*{{{*/
   int seg_len = w->processing_gain;
@@ -186,25 +222,6 @@ void embed_to_noise(char *wmark, double *noise_seq, int buffer_len){
 /*}}}*/
 }
       
-
-int get_schema(char *s){
-/*{{{*/
-  if(strstr(s, "plus"))
-    w->schema = PLUS_SCHEMA;
-  else if(strstr(s, "mult"))
-    w->schema = MULT_SCHEMA;
-  else if(strstr(s, "powr"))
-    w->schema = POWR_SCHEMA;
-  else{
-    printf("The valid schemas are plus, mult, and powr. \n");
-    printf("plus: v'_i = v_i+aw_i\n");
-    printf("mult: v'_i = v_i(1+aw_i)\n");
-    printf("powr: v'_i = v_i(e*a^w_i)\n");
-  }
-  return w->schema;
-/*}}}*/
-}
-
 int set_schema(int s){
 /*{{{*/
   switch (s) {
@@ -284,7 +301,7 @@ void watermark_elt(double w_d, complex *freq_elt){
   switch (w->schema) {
    case PLUS_SCHEMA:
     *freq_elt += w->alpha * w_d;
-    *freq_elt += w->alpha * w_d * I;
+    //*freq_elt += w->alpha * w_d * I;
     return;
    case MULT_SCHEMA:
     *freq_elt = *freq_elt * (1 + (w->alpha)*w_d);
@@ -1082,8 +1099,8 @@ int test(char *orig_path, char *test_path){
     fftw_execute(ft_test);
 
     if(counter == 3 && debug){
-      print_pow_density(orig_freq_buffer, 10);
-      print_pow_density(test_freq_buffer, 10);
+      print_pow_density(orig_freq_buffer, 8);
+      print_pow_density(test_freq_buffer, 8);
     }
     if(w->type == FH_EMBED)
       fh_extract_watermark(orig_freq_buffer, test_freq_buffer, extract_buffer);
@@ -1109,7 +1126,7 @@ int test(char *orig_path, char *test_path){
     //
     double max_diff = 0;
     int max_i = 0;
-    for(int i = 0; i < BUFFER_LEN/2+1; i++){
+    for(int i = 0; i < freq_buffer_len; i++){
       x_dot_x += extract_buffer[i] * extract_buffer[i];
       o_dot_x += orig_wmark[i] * extract_buffer[i];
 

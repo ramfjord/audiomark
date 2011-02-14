@@ -41,7 +41,11 @@ int main(int argc, char *argv[]){
   if(argc > 3)
     strncpy(config_path, argv[3], PATH_SIZE);
 
-  parse_config(config_path);
+  if(ERROR == parse_config(config_path)){
+    fprintf(stderr, "Error parsing config");
+    goto freedom;
+  }
+    
 
   if(w->w_message == NULL){
     printf("using default message\n");
@@ -57,6 +61,7 @@ int main(int argc, char *argv[]){
 
   print_watermark_info();
 
+freedom:
   free(w->w_message);
-  //free(w);
+  free(w);
 } // main
