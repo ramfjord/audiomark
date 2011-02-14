@@ -1,5 +1,7 @@
 @author Thomas Ramfjord
 
+Use audiomark to embed secret data into ".wav" files!  Unfortunately only available to linux users, audiomark allows you to embed a string of data into a wav file via the "embed" command.  You can then check to see if your friends got the same wav file from you by testing it with the "test" command!
+
 Audiomark is an incomplete attempt at implementing an audio watermarker.  It requires libsndfile and fftw3 to be compiled, and had only been tested on ubuntu.
 
 To use it you have to make a watermark configuration file, which contains several pieces of information necessary to embed data, including the string you wish to embed.
