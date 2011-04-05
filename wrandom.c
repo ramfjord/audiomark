@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "wrandom.h"
 
 int *my_random = 0;
@@ -39,4 +40,8 @@ int next_rand(int n_chosen){
   my_random[random_size - n_chosen - 1] = temp;
 
   return temp;
+}
+
+double rand_double(){
+  return (double)rand() / (double)RAND_MAX;
 }

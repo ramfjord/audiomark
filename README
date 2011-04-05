@@ -5,3 +5,12 @@ Use audiomark to embed secret data into ".wav" files!  Unfortunately only availa
 Audiomark is an incomplete attempt at implementing an audio watermarker.  It requires libsndfile and fftw3 to be compiled, and had only been tested on ubuntu.
 
 To use it you have to make a watermark configuration file, which contains several pieces of information necessary to embed data, including the string you wish to embed.
+
+encode to mp3:
+  lame <infile.wav> <outfile.mp3>
+
+play mp3: 
+  mpg123 <blah.mp3>
+
+decode from mp3
+  mpg123 -w <outfile.wav> <infile.mp3>

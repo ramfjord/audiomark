@@ -16,4 +16,6 @@ void set_rand(int size);
 // in the past n_chosen calls.
 int next_rand(int n_chosen);
 
+// just returns a random double
+double rand_double();
 #endif
