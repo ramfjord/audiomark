@@ -152,6 +152,6 @@ void print_complex_array(complex *array, int n){
 void array_div(int n, double *array, int size){
 /*{{{*/
   for(int i = 0; i < size; i++)
-    array[i] /= n;
+    array[i] /= (double)n;
 /*}}}*/
 }

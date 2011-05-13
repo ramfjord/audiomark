@@ -1,3 +1,6 @@
+#ifndef W_INCLUDES
+#define W_INCLUDES
+
 #include <complex.h>
 #include <math.h>
 #include <fftw3.h>
@@ -12,15 +15,18 @@
 #include "wrandom.h"
 #include "w_array_ops.h"
 
+#endif
+
 // pulled from watermark.c
-extern	watermark *w;
-int	embed_debug = 1;
+extern	watermark *wmark;
+int	embed_debug = 0;
+int	embed_iteration = 0;
 
 // These functions are only used in embedding
 void  print_embedding_info(char *infile_path, char *outfile_path, char *orig_out_path, char *config_path);
 void  watermark_elt(double w_d, complex *freq_elt);
-void  ss_process_signal(complex *freq_buffer);
-void  fh_process_signal(complex *freq_buffer);
+void  ss_embed_to_signal(complex *freq_buffer);
+void  fh_embed_to_signal(complex *freq_buffer);
 int   embed(char *infile_path, char *outfile_path, char *orig_outfile_path);
 
 int main(int argc, char *argv[]){
@@ -29,13 +35,6 @@ int main(int argc, char *argv[]){
   char		config_path[PATH_SIZE];
   char		orig_out_path[PATH_SIZE];
   FILE		*config;
-
-  w = (watermark *)malloc(sizeof(watermark));
-
-  w->w_message = NULL;
-  w->alpha = .1;
-  w->schema = MULT_SCHEMA;
-  w->key_seed = 15;
 
   // set default parameters for testing
   strcpy(infile_path, "audio/input.wav");
@@ -53,104 +52,92 @@ int main(int argc, char *argv[]){
   if(argc > 3)
     strncpy(config_path, argv[3], PATH_SIZE);
 
+	gen_default_wmark();
   if(ERROR == parse_config(config_path)){
     fprintf(stderr, "Error parsing config");
-    goto freedom;
+    goto main_freedom;
   }
-
-  if(w->w_message == NULL){
-    printf("using default message\n");
-    w->w_message = (char *)malloc(strlen("hello I'm thomas"));
-    strcpy(w->w_message,"hello I'm thomas");
-    w->w_len = strlen("hello I'm thomas");
-    w->type = SS_EMBED;
-  }
-  
-  w->processing_gain = BUFFER_LEN / w->w_len;
 
   print_embedding_info(infile_path, outfile_path, orig_out_path, config_path);
 
   print_watermark_info();
 
-  embed(infile_path, outfile_path, orig_out_path);
+  if(embed(infile_path, outfile_path, orig_out_path))
+    goto main_freedom;
 
   print_watermark_info();
 
-freedom:
-  free(w->w_message);
-  free(w);
+main_freedom:
+  free(wmark->message);
+  free(wmark);
 } // main
 
-void watermark_elt(double w_d, complex *freq_elt){
-/*{{{*/
-  switch (w->schema) {
-   case PLUS_SCHEMA:
-    *freq_elt += w->alpha * w_d;
-    *freq_elt += w->alpha * w_d * I;
-    return;
-   case MULT_SCHEMA:
-    *freq_elt = *freq_elt * (1 + (w->alpha)*w_d);
-    return;
-   case POWR_SCHEMA:
-    printf("UNIMPLEMENTED!!!");
-    return;
-   default:
-    return;
-  }/*}}}*/
-}
+void watermark_elt(double w_d, complex *freq_elt)
+{ //{{{
+	switch (wmark->schema) {
+		case PLUS_SCHEMA:
+			*freq_elt += wmark->alpha * w_d;
+			*freq_elt += wmark->alpha * w_d * I;
+			return;
+		case MULT_SCHEMA:
+			*freq_elt = *freq_elt * (1 + (wmark->alpha)*w_d);
+			return;
+		case POWR_SCHEMA:
+			*freq_elt = *freq_elt * pow(M_E, wmark->alpha*w_d);
+			return;
+		default:
+			return;
+	}
+} //}}}
 
-void fh_process_signal(complex *freq_buffer){
-/*{{{*/
-  char *wmark = w->w_message;
+void fh_embed_to_signal(complex *freq_buffer)
+{ //{{{
+    if(embed_iteration >= 4 && embed_iteration <= 5 || embed_iteration == 0)
+      printf("embed %d orig: ", embed_iteration); print_pow_density(freq_buffer, 10);
+
+  char *message = wmark->message;
   int next_r = 0;
-  for(int i = 0; i < WMARK_LEN; i++){
-    if(wmark[i] == '\0')
-      break;
+  for(int i = 0; i < wmark->len; i++){
     next_r = next_rand(i);
-    //printf("%f ", freq_buffer[next_r]);
-    //if(embed_debug)
-     // printf("%5.d ", next_r);
-    watermark_elt(c_to_d(wmark[i]), &(freq_buffer[next_r]));
+    complex old_freq_elt = freq_buffer[next_r];
+    watermark_elt(c_to_d(message[i]), &(freq_buffer[next_r]));
+
+    if(embed_iteration >= 4 && embed_iteration <= 5 || embed_iteration == 0){
+      printf("embed %d %c, %1.4f+%1.4fi => %1.4f+%1.4fi : %d : %f\n",
+	  embed_iteration, message[i],
+	  creal(old_freq_elt), cimag(old_freq_elt),
+	  creal(freq_buffer[next_r]), cimag(freq_buffer[next_r]),
+	  next_r, c_to_d(message[i]));
+    }
   }
-  //if(embed_debug)
-  //  putchar('\n');
+} //}}}
 
-  /*
-   * Gets stats of fourier domain real values
-   *
-  double stats[WMARK_LEN];
-  double mean, min, max;
-  for(int i = 0; i < WMARK_LEN; i++)
-    //stats[i] = creal(freq_buffer[i]);
-    stats[i] = (double)i;
-
-  for(int i = 0; i < WMARK_LEN; i++){
-    if(creal(freq_buffer[i]) > max) max = creal(freq_buffer[i]);
-    if(creal(freq_buffer[i]) < min) min = creal(freq_buffer[i]);
-    mean += creal(freq_buffer[i]) / WMARK_LEN;
-  }
-  //printf("mean = %f, max = %f, min = %f\n", mean, max, min);
-  */
-/*}}}*/
-}
-
-void ss_process_signal(complex *freq_buffer){
-/*{{{*/
+// Watermark embedding process described in Cox et al.
+void ss_embed_to_signal(complex *freq_buffer)
+{ //{{{
   int		f_buffer_len = BUFFER_LEN / 2 + 1;
-  double	noise_seq[f_buffer_len];
 
-  generate_noise(noise_seq, f_buffer_len);
-  embed_to_noise(w->w_message, noise_seq, f_buffer_len);
+	// extract V, represented here by a set of indices from the
+	// frequency domain.
+	int *embed_indices;
+	int noise_len = extract_sequence_indices(freq_buffer, f_buffer_len, 
+																					 &embed_indices);
+	// noise_seq corresponds to W
+  double	noise_seq[noise_len];
+  generate_noise(noise_seq, noise_len);
+  embed_to_noise(noise_seq, noise_len);
 
-  for(int i = 0; i < f_buffer_len; i++)
-    watermark_elt(noise_seq[i], &(freq_buffer[i]));
+	// embed W into V
+  for(int i = 0; i < noise_len; i++){
+		int freq_i = embed_indices[i];
+    watermark_elt(noise_seq[i], &(freq_buffer[freq_i]));
+	}
 
-/*}}}*/
-}
+	free(embed_indices);
+} //}}}
 
-int embed(char *infile_path, char *outfile_path, char *orig_outfile_path){
-/*{{{*/
-  char		*wmark = w->w_message;
+int embed(char *infile_path, char *outfile_path, char *orig_outfile_path)
+{ //{{{
   SF_INFO	sfinfo;		// struct with info on the samplerate, number of channels, etc
   SNDFILE   	*s_infile;
   SNDFILE   	*s_outfile;
@@ -161,8 +148,15 @@ int embed(char *infile_path, char *outfile_path, char *orig_outfile_path){
   double	*time_buffer;
   complex	*freq_buffer;
 
-  seed_rand(w->key_seed);
-  set_rand(w->w_len); 
+  void		(*embed_to_signal)(complex *);
+  
+  if(wmark->type == FH_EMBED)
+    embed_to_signal = &fh_embed_to_signal;
+  else
+    embed_to_signal = &ss_embed_to_signal;
+
+  seed_rand(wmark->key_seed);
+  set_rand(wmark->len); 
 
   //
   // Open input file and output file
@@ -204,20 +198,11 @@ int embed(char *infile_path, char *outfile_path, char *orig_outfile_path){
   int bytes_read;
 
   int counter = 0;
-  double bytes_avg;
   while(bytes_read = sf_read_double(s_infile, time_buffer, BUFFER_LEN)){
-    //embed_debug = (counter <= 3) ? 1 : 0;
-    counter++;
+    embed_debug = (counter <= 3) ? 1 : 0;
     //printf("counter = %d\n", counter);
     if(embed_debug && counter == 3) printf("%d embed: \n",counter);
       
-    if(counter == 3){
-      bytes_avg = 0;
-      for(int i = 0; i < BUFFER_LEN; i++){
-	bytes_avg += time_buffer[i] / BUFFER_LEN;
-      }
-    }
-
     // write out the original data to test for differences.
     sf_write_double(s_orig_out, time_buffer, bytes_read);
 
@@ -225,17 +210,15 @@ int embed(char *infile_path, char *outfile_path, char *orig_outfile_path){
     if(bytes_read == BUFFER_LEN){
       fftw_execute(ft_forward);
 
+      // DEBUG print embed read info
       if(counter == 3 && embed_debug){
 	printf("org: ");
 	print_pow_density(freq_buffer, 10);
       }
       
-      // embed the watermark into the frequency domain
-      if(w->type == FH_EMBED)
-	fh_process_signal(freq_buffer);
-      else
-	ss_process_signal(freq_buffer);
+      embed_to_signal(freq_buffer);
 
+      // DEBUG print embed read info
       if(counter == 3 && embed_debug){
 	printf("new: ");
 	print_pow_density(freq_buffer, 10);
@@ -258,6 +241,8 @@ int embed(char *infile_path, char *outfile_path, char *orig_outfile_path){
       array_div(BUFFER_LEN, time_buffer, BUFFER_LEN);
     }
 
+    counter++;
+    embed_iteration++;
   } //while
 
   //
@@ -272,11 +257,10 @@ int embed(char *infile_path, char *outfile_path, char *orig_outfile_path){
   sf_close(s_infile);
   sf_close(s_outfile);
   sf_close(s_orig_out);
-/*}}}*/
-} //embed
+} //}}}
 
 void print_embedding_info(char *infile_path, char *outfile_path, char *orig_out_path, char *config_path)
-{/*{{{*/
+{ //{{{
   char buffer[1000];
   int l_to_wmark = strlen(infile_path) + strlen("transform") + 6;
 
@@ -360,4 +344,4 @@ void print_embedding_info(char *infile_path, char *outfile_path, char *orig_out_
 
   puts(buffer);
   puts("");
-}/*}}}*/
+} //}}}
