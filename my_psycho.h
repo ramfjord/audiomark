@@ -1,0 +1,3 @@
+#define SAMPLE_RATE 44200.0
+// TODO verify MIN_THRESH
+#define MIN_THRESH .01
