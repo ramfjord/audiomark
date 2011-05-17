@@ -9,8 +9,5 @@ To use it you have to make a watermark configuration file, which contains severa
 encode to mp3:
   lame <infile.wav> <outfile.mp3>
 
-play mp3: 
-  mpg123 <blah.mp3>
-
 decode from mp3
-  mpg123 -w <outfile.wav> <infile.mp3>
+  lame --decode <outfile.mp3> <newwav.wav>
