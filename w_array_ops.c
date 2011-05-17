@@ -5,31 +5,55 @@
 #include <string.h>
 #include "w_array_ops.h"
 
+
+void _print_int(void *elt) { printf("%d", *(int *)elt); }
+void _print_double(void *elt) { printf("%5.3lf", *(double *)elt); }
+void _print_double_stdout(void *elt){ printf("%5.3lf ", *(double *)elt); }
+void _print_pow_dens(void *elt) { printf("%5.3lf", pow_elem(*(complex *)elt)); }
+void _print_complex(void *elt) {
+	complex *c = (complex *)elt;
+	printf("%5.3lf + %5.3lfi", creal(*c),cimag(*c));
+}
+
+void print_array(char *array, int n, int eltsize, void (*print)(void *))
+{
+	printf("[");
+	print(array);
+	for(int i = 1; i < n; i++){
+		printf(", ");
+		print(&array[i*eltsize]);
+	}
+	printf("]\n");
+}
+
+void print_complex_array(complex *array, int n){
+	print_array((char *)array, n, sizeof(complex), &_print_complex);
+}
+
+void print_d_array(double *array, int n){
+	print_array((char *)array, n, sizeof(double), &_print_double);
+}
+
+void print_i_array(int *array, int n){
+	print_array((char *)array, n, sizeof(int), &_print_int);
+}
+
+void print_pow_density(complex *array, int n){
+	print_array((char *)array, n, sizeof(complex), &_print_pow_dens);
+}
+
 void print_r_complex_array(complex *array, int n){
-  printf("[%8.4lf",creal(array[0]));
-  for(int i = 1; i < n; i++) 
-    printf(", %8.4lf",creal(array[i]));
-  printf("]\n");
+	print_array((char *)array, n, sizeof(complex), &_print_double);
 }
 
 double pow_elem(complex elem){
   return sqrt(pow(creal(elem),2) + pow(cimag(elem), 2));
-  // TODO change back
-  //return creal(elem);
 }
 
-void print_pow_density(complex *array, int n){
-  printf("[%8.4lf", pow_elem(array[0]));
-  for(int i = 1; i < n; i++) 
-    printf(", %8.4lf",pow_elem(array[i]));
-  printf("]\n");
-}
-
-void print_d_array(double *array, int n){
-  printf("[%8.4lf",array[0]);
-  for(int i = 1; i < n; i++) 
-    printf(", %5.3lf",array[i]);
-  printf("]\n");
+void swap_d(double *a, double *b){
+	double tmp = *a;
+	*a = *b;
+	*b = tmp;
 }
 
 // divide double *array of size size by n
@@ -95,7 +119,8 @@ int get_min_from_indices(int *indices, complex *buffer, int n)
 // array of syze n.
 // - the size of an elem is determined by pow_elem
 // - order n*len time - could probably be faster
-//
+// -CURRENTLY doesn't choose dc offset or nyquist emelents
+//  TODO move this logic somewhere else, and stop using A_FREQ_LEN in this file
 int *get_n_biggest(complex *buffer, int len, int n)
 { //{{{
 	int *indices = (int *) malloc(n * sizeof(int));
@@ -104,6 +129,8 @@ int *get_n_biggest(complex *buffer, int len, int n)
 	double min_pow = -1;
 	int min_index=0;
 	for(int i = 0; i < len; i++){
+		if(i % A_FREQ_LEN == 0) continue; // don't ever look at dc offset
+		if((i+1) % A_FREQ_LEN == 0) continue; // don't ever look at nyquiest freq
 		if(pow_elem(buffer[i]) > min_pow){
 			indices[min_index] = i;
 			min_index = get_min_from_indices(indices, buffer, n);

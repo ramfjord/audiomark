@@ -26,10 +26,12 @@ typedef struct watermark{
   unsigned key_seed;
   int processing_gain;
   int type;
+	int bpf;
 } watermark;
 
 void gen_default_wmark();
 int	parse_config(char *config);
+void string_repeat(char *ssmall, char *slarge, int len);
 void free_wmark();
 void  	print_watermark_info();
 void  	print_sfile_info(SF_INFO sfinfo);
@@ -42,4 +44,10 @@ int			extract_sequence_indices(complex *freq_buff, int len, int **indices);
 int	get_schema(char *s);
 int   	set_schema(int s);
 int   	set_alpha(int a);
+
+int get_deinterleave_i(int i, int size, int channels);
+int get_interleave_i(int i, int size, int channels);
+void interleave_d_array(double *buff, int size, int channels, int fwd);
+void deinterleave_channels(double *time_buff, int channels);
+void interleave_channels(double *time_buff, int channels);
 #endif

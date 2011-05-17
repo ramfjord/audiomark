@@ -16,12 +16,19 @@
 #include "my_psycho.h"
 #include "w_array_ops.h"
 
+double sample_rate = 0;
+
 double cb_limits[25] = { 20,  100,  200,  300,  400,  510,  630,  770,
 										 	  920, 1080, 1270, 1480, 1720, 2000, 2320, 2700,
 										 	 3150, 3700, 4400, 5300, 6400, 7700, 9500,
 										  12000, 15500};
 
 double min_amplitude = 0;
+
+void set_sample_rate(double s)
+{
+	sample_rate = s;
+}
 
 double hz_to_bark(double hz)
 {/*{{{*/
@@ -46,7 +53,7 @@ int get_critband(double hz)
 // from the fft
 double get_freq(int i)
 { //{{{
-	return (double)i * SAMPLE_RATE / 1024;
+	return (double)i * sample_rate / 1024;
 } //}}}
 
 // Returns the closest index in the frequency buffer to freq
@@ -66,13 +73,13 @@ int get_i(double freq)
 // dividing by 0
 double get_dB(const complex a)
 { //{{{
-	return 20 * log10(sqrt( pow(creal(a),2) + pow(cimag(a),2) ) / min_amplitude);
+	return 20 * log10(pow_elem(a) / min_amplitude);
 } //}}}
 
 // amp_dB is set to the amplitudes of freq_buf, in dB
 void get_amp_dB(const complex *freq_buf, double *amp_dB)
 { //{{{
-	min_amplitude = 0; // global
+	min_amplitude = MIN_AMPLITUDE; // global
 	for(int i = 0; i < FREQ_LEN; i++)
 		if(pow_elem(freq_buf[i]) < min_amplitude) 
 			min_amplitude = pow_elem(freq_buf[i]);
@@ -87,13 +94,17 @@ void get_amp_dB(const complex *freq_buf, double *amp_dB)
 // TODO test me
 int is_tonal(const double *amp_dB)
 { // {{{
-	double L_i = *amp_dB; // name used in Terhardt
+	double L_i = amp_dB[0]; // name used in Terhardt
 
-	if(amp_dB[1] < L_i) return 0;
-	if(amp_dB[-1] <= L_i) return 0;
+	// L_(i-1) < L_i >= L_(i+1)
+	if(!(amp_dB[-1] < L_i)) return 0;
+	if(!(amp_dB[1] <= L_i)) return 0;
 
-	for(int i = -3; i <= 3; i++)
-		if(i != 1 && i != -1 && L_i - amp_dB[i] < 7) return 0;
+	// L_i - L_j >= 7
+	for(int j = -3; j <= 3; j++){
+		if(-1 <= j && j <= 1) continue;
+		if(!(L_i - amp_dB[j] >= 7)) return 0;
+	}
 
 	return 1;
 } // }}}
@@ -110,8 +121,13 @@ int get_tonal_freqs(const double *amp_dB, int **indices)
 	int i_i = 0; // i_i = indices index
 	// tonal calculations look at i-3...i+3, also don't want nyquist/dc freqs
 	for(int i = 4; i < FREQ_LEN-4; i++){ 
-		if(is_tonal(&amp_dB[i])) (*indices)[i_i++] = i;
+		if(is_tonal(&amp_dB[i])){ 
+			(*indices)[i_i++] = i;
+		}
 	}
+	// TODO REMOVE
+	printf("there are %d tonal components\n", i_i);
+	// END
 
 	return i_i;
 } //}}}
@@ -127,7 +143,9 @@ double get_inter_mask(double *amp_dB, int *tonal_indices, int num_tonal, int u)
 	
 	// calculate the masking effect from other frequencies by using a linear
 	// approximation of the masking curve
-	for(int v = 1; v < FREQ_LEN; v++){
+	for(int i = 1; i < num_tonal; i++){
+		int v = tonal_indices[i];
+
 		double L_v = amp_dB[v];
 		double f_v = get_freq(v);
 		double z_v = hz_to_bark(f_v);
@@ -172,15 +190,15 @@ double get_noise_mask(double *amp_dB, int *tonal_indices, int num_tonal, int u)
 { //{{{
 	// Sum all the frequency components within .5 barks of u, skipping the five
 	// central samples of each tonal component (if i is tonal, no i-2...i+2)
-	int u_hz = get_freq(u);
-	int u_bark = hz_to_bark(u_hz);
+	double u_hz = get_freq(u);
+	double u_bark = hz_to_bark(u_hz);
 	double cb_width = cb_limits[(int)(u_bark+1)]; // upper bound on freq width
 
 	int lo = get_i(u_hz - (cb_width/2));
-	while(u_hz - hz_to_bark(get_freq(lo)) > .5) lo++;
+	while(u_bark - hz_to_bark(get_freq(lo)) > .5) lo++;
 
 	int hi = get_i(u_hz + (cb_width/2));
-	while(hz_to_bark(get_freq(hi)) - u_hz > .5) hi--;
+	while(hz_to_bark(get_freq(hi)) - u_bark > .5) hi--;
 
 	int i_i = 0;
 	double sum = 0;
@@ -205,23 +223,36 @@ double get_noise_mask(double *amp_dB, int *tonal_indices, int num_tonal, int u)
 	return sum;
 } //}}}
 
-int get_masking_coeffs(complex *buffer, int **indices)
+// see equation (12) in terhardt
+double get_pitch_weight(double spl_excess, double freq)
+{ //{{{
+	if(spl_excess < 0) return 0;
+
+	// first part represents the effect of spl_excess - doesn't increase much
+	// after around 20db of excess.
+	
+	// second part represents frequency 
+	return (1 - exp((0-spl_excess)/15)) *
+				 pow(1 + 0.07 * pow((freq/(0.7*1000) - (0.7*1000)/freq),2), -1/2);
+} //}}}
+
+int get_pitch_saliencies(complex *buffer, int **indices, double **weights)
 { //{{{
 	// CALCULATION OF SIMULTANEOUS MASKING COEFFICIENTS
 
+	// calculate tonal simultaneous masking
 	// see "Algorithm for extraction of pitch and pitch salience from
 	// complex tonal signals", by Terhardt, Stoil, Seewann
 
 	double amp_dB[FREQ_LEN]; // the amplitude of each freq component in dB
 	get_amp_dB(buffer,amp_dB);
 
-	// calculate tonal simultaneous masking
-	int *tonal_indices;
+	int *tonal_indices = NULL;
 	int num_tonal = get_tonal_freqs(amp_dB, &tonal_indices);
 
 	// iterate through tonal frequency components, and calculate the sound
 	// pressure level excess of each one.
-	double *spl_excess = (double *)malloc(num_tonal * sizeof(double));
+	double *pitch_weights = (double *)malloc(num_tonal * sizeof(double));
 	double intra_mask = 0;
 	for(int j = 0; j < num_tonal; j++){
 		int i = tonal_indices[j];
@@ -230,18 +261,30 @@ int get_masking_coeffs(complex *buffer, int **indices)
 
 		// effect of other frequencies on spl_excess
 		double inter_mask = get_inter_mask(amp_dB, tonal_indices, num_tonal, i);
+		printf("freq = %lf, inter_mask = %lf, ", get_freq(i), inter_mask);
 
 		// effect of non-tonal components on spl_excess.
 		double noise_mask = get_noise_mask(amp_dB, tonal_indices, num_tonal, i);
+		printf("noise_mask = %lf, ", noise_mask);
 
 		// effect of the threshold of quiet - even in silence a frequency of this
 		double freq = get_freq(i);
 		double q_mask = get_quiet_thresh(freq);
 		q_mask = pow(10,q_mask/10);
+		printf("q_mask = %lf, ", q_mask);
 
-		// see (4)
-		spl_excess[i] - amp_dB[i] - (10*log(inter_mask + noise_mask + q_mask));
+		// see equation (4) of terhardt
+		double spl_excess = amp_dB[i] - (10*log(inter_mask + noise_mask + q_mask));
+		printf("SPL excess = %lf\n", spl_excess);
+
+		// "the extent to which each tonal component contributes to the entire tonal
+		// percept is considered to depend on (1) the SPL excess and (2) the
+		// frequency of the component."  See eqn (12)
+		pitch_weights[j] = get_pitch_weight(spl_excess, get_freq(i));
 	}
+
+	*indices = tonal_indices;
+	*weights = pitch_weights;
 
 	// Temporal masking: ~1:25 Ambikairajah
 	//  Jesteadt et al. : M_f(t,m) = a*(b-log_10 dt)(L(t,m)-c)
@@ -254,14 +297,6 @@ int get_masking_coeffs(complex *buffer, int **indices)
 	// where TM = temporal masking, SM = simultaneous masking
 	// often P = 5 seems to work pretty well
 
-	free(tonal_indices);
-	free(spl_excess);
-	
 	// TODO change return value
-	return 1;
+	return num_tonal;
 } //}}}
-
-int main()
-{
-	int blah;
-}

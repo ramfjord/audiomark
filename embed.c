@@ -19,14 +19,15 @@
 
 // pulled from watermark.c
 extern	watermark *wmark;
-int	embed_debug = 0;
+int	embed_debug = 14;
 int	embed_iteration = 0;
+int embed_verbose = 0;
 
 // These functions are only used in embedding
 void  print_embedding_info(char *infile_path, char *outfile_path, char *orig_out_path, char *config_path);
 void  watermark_elt(double w_d, complex *freq_elt);
-void  ss_embed_to_signal(complex *freq_buffer);
-void  fh_embed_to_signal(complex *freq_buffer);
+void  ss_embed_to_signal(complex *freq_buffer, int f_buffer_len);
+void  fh_embed_to_signal(complex *freq_buffer, int f_buffer_len);
 int   embed(char *infile_path, char *outfile_path, char *orig_outfile_path);
 
 int main(int argc, char *argv[]){
@@ -58,14 +59,13 @@ int main(int argc, char *argv[]){
     goto main_freedom;
   }
 
-  print_embedding_info(infile_path, outfile_path, orig_out_path, config_path);
-
-  print_watermark_info();
+	if(embed_verbose){
+		print_embedding_info(infile_path, outfile_path, orig_out_path, config_path);
+		print_watermark_info();
+	}
 
   if(embed(infile_path, outfile_path, orig_out_path))
     goto main_freedom;
-
-  print_watermark_info();
 
 main_freedom:
   free(wmark->message);
@@ -90,7 +90,7 @@ void watermark_elt(double w_d, complex *freq_elt)
 	}
 } //}}}
 
-void fh_embed_to_signal(complex *freq_buffer)
+void fh_embed_to_signal(complex *freq_buffer, int f_buffer_len)
 { //{{{
     if(embed_iteration >= 4 && embed_iteration <= 5 || embed_iteration == 0)
       printf("embed %d orig: ", embed_iteration); print_pow_density(freq_buffer, 10);
@@ -113,15 +113,20 @@ void fh_embed_to_signal(complex *freq_buffer)
 } //}}}
 
 // Watermark embedding process described in Cox et al.
-void ss_embed_to_signal(complex *freq_buffer)
+void ss_embed_to_signal(complex *freq_buffer, int f_buffer_len)
 { //{{{
-  int		f_buffer_len = BUFFER_LEN / 2 + 1;
-
 	// extract V, represented here by a set of indices from the
 	// frequency domain.
 	int *embed_indices;
-	int noise_len = extract_sequence_indices(freq_buffer, f_buffer_len, 
+
+	// avoid sending dc offset at potential index
+	int noise_len = extract_sequence_indices(freq_buffer, f_buffer_len-1, 
 																					 &embed_indices);
+	
+	if(embed_iteration == embed_debug){
+		//printf("embed indices:\n");
+		//print_i_array(embed_indices, 20);
+	}
 	// noise_seq corresponds to W
   double	noise_seq[noise_len];
   generate_noise(noise_seq, noise_len);
@@ -141,14 +146,15 @@ int embed(char *infile_path, char *outfile_path, char *orig_outfile_path)
   SF_INFO	sfinfo;		// struct with info on the samplerate, number of channels, etc
   SNDFILE   	*s_infile;
   SNDFILE   	*s_outfile;
-  SNDFILE	*s_orig_out;
+  SNDFILE			*s_orig_out;
 
-  fftw_plan 	ft_forward;
-  fftw_plan 	ft_reverse;
+  fftw_plan 	*ft_forward;
+  fftw_plan 	*ft_reverse;
   double	*time_buffer;
   complex	*freq_buffer;
 
-  void		(*embed_to_signal)(complex *);
+  void		(*embed_to_signal)(complex *, int);
+	int channels;
   
   if(wmark->type == FH_EMBED)
     embed_to_signal = &fh_embed_to_signal;
@@ -171,86 +177,109 @@ int embed(char *infile_path, char *outfile_path, char *orig_outfile_path)
     return 1;
   }
 
-  // s_orig_out = watermaked audio file
-  if(!(s_orig_out = sf_open(orig_outfile_path, SFM_WRITE, &sfinfo))){
-    fprintf(stderr,"#######\terror opening the following file for writing: %s\n", orig_outfile_path);
-    return 1;
-  }
-
   // s_outfile = watermaked audio file
   if(!(s_outfile = sf_open(outfile_path, SFM_WRITE, &sfinfo))){
     fprintf(stderr,"error opening the following file for writing: %s\n", outfile_path);
     return 1;
   }
 
-  print_sfile_info(sfinfo);
+  // s_orig_out = watermaked audio file
+  if(!(s_orig_out = sf_open(orig_outfile_path, SFM_WRITE, &sfinfo))){
+    fprintf(stderr,"error opening the following file for writing: %s\n", orig_outfile_path);
+    return 1;
+  }
+
+	channels = sfinfo.channels;
+	if(embed_verbose)
+		print_sfile_info(sfinfo);
 
   //
   // Read, process, and write data
   // -----------------------------
 
-  time_buffer = (double *) malloc(sizeof(double) * BUFFER_LEN);
-  freq_buffer = (complex *) fftw_malloc(sizeof(complex) * (BUFFER_LEN/2 + 1));
+  time_buffer = (double *) malloc(sizeof(double) * BUFFER_LEN * channels);
+  freq_buffer = (complex *) fftw_malloc(sizeof(complex) * FREQ_LEN * channels);
   
-  ft_forward = fftw_plan_dft_r2c_1d(BUFFER_LEN, time_buffer, freq_buffer, FFTW_ESTIMATE);
-  ft_reverse = fftw_plan_dft_c2r_1d(BUFFER_LEN, freq_buffer, time_buffer, FFTW_ESTIMATE);
+	ft_forward = (fftw_plan *)malloc(sizeof(fftw_plan) * sfinfo.channels);
+	ft_reverse = (fftw_plan *)malloc(sizeof(fftw_plan) * sfinfo.channels);
+
+	for(int i = 0; i < channels; i++){
+		ft_forward[i] = fftw_plan_dft_r2c_1d(BUFFER_LEN, time_buffer+i*BUFFER_LEN,
+																				 freq_buffer+i*FREQ_LEN, FFTW_ESTIMATE);
+		ft_reverse[i] = fftw_plan_dft_c2r_1d(BUFFER_LEN, freq_buffer+i*FREQ_LEN,
+																			 time_buffer+i*BUFFER_LEN, FFTW_ESTIMATE);
+	}
 
   int bytes_read;
 
   int counter = 0;
-  while(bytes_read = sf_read_double(s_infile, time_buffer, BUFFER_LEN)){
-    embed_debug = (counter <= 3) ? 1 : 0;
-    //printf("counter = %d\n", counter);
-    if(embed_debug && counter == 3) printf("%d embed: \n",counter);
+  while(bytes_read = sf_read_double(s_infile, time_buffer, BUFFER_LEN*channels)){
+		// embed to orig_out to account for some of the floating point errors
+		sf_write_double(s_orig_out, time_buffer, bytes_read);
       
-    // write out the original data to test for differences.
-    sf_write_double(s_orig_out, time_buffer, bytes_read);
+    // only embed in a frame where we read in the full amount for the DFT
+		if(bytes_read == BUFFER_LEN*channels){
 
-    // only embed in a frame where we read in the full amount for the fourier transform
-    if(bytes_read == BUFFER_LEN){
-      fftw_execute(ft_forward);
+			// if there are, say, 2 channels a,b, the audio will be stored as
+			// a1, b1, a2, b2, ...
+			// convert it to a1, a2, ... , b1, b2, ...
+			deinterleave_channels(time_buffer, channels);
 
-      // DEBUG print embed read info
-      if(counter == 3 && embed_debug){
-	printf("org: ");
-	print_pow_density(freq_buffer, 10);
-      }
-      
-      embed_to_signal(freq_buffer);
+			for(int i = 0; i < channels; i++)
+				fftw_execute(ft_forward[i]);
 
-      // DEBUG print embed read info
-      if(counter == 3 && embed_debug){
-	printf("new: ");
-	print_pow_density(freq_buffer, 10);
-      }
+			// DEBUG print embed read info
+			if(counter == embed_debug){
+				printf("org: ");
+				print_pow_density(freq_buffer, 10);
+			}
 
-      fftw_execute(ft_reverse);
+			embed_to_signal(freq_buffer, FREQ_LEN*channels);
 
-      // The DFT naturally multiplies every array element by the size of the array, reverse this
-      array_div(BUFFER_LEN, time_buffer, BUFFER_LEN);
+			// DEBUG print embed read info
+			if(counter == embed_debug){
+				printf("new: ");
+				print_pow_density(freq_buffer, 10);
+			}
 
-    } // if(bytes_read == BUFFER_LEN)
+			for(int i = 0; i < channels; i++)
+				fftw_execute(ft_reverse[i]);
 
-    sf_write_double(s_outfile, time_buffer, bytes_read);
+			// The DFT naturally multiplies every array element by the size of the array, reverse this
+			array_div(BUFFER_LEN, time_buffer, BUFFER_LEN*channels);
 
-    if(counter == 3 && embed_debug){
-      fftw_execute(ft_forward);
-      printf("aft: ");
-      print_pow_density(freq_buffer, 10);
-      fftw_execute(ft_reverse);
-      array_div(BUFFER_LEN, time_buffer, BUFFER_LEN);
-    }
+			interleave_channels(time_buffer, channels);
 
-    counter++;
-    embed_iteration++;
-  } //while
+		} // if(bytes_read == BUFFER_LEN)
+		sf_write_double(s_outfile, time_buffer, bytes_read);
+
+			//if(counter == embed_debug){
+			//	deinterleave_channels(time_buffer, channels);
+			//	for(int i = 0; i < channels; i++)
+			//		fftw_execute(ft_forward[i]);
+			//		printf("pt:  "); print_pow_density(freq_buffer,10);
+			//		printf("cpt: "); print_complex_array(freq_buffer,10);
+
+			//	for(int i = 0; i < channels; i++)
+			//		fftw_execute(ft_reverse[i]);
+			//	interleave_channels(time_buffer, channels);
+			//	array_div(BUFFER_LEN, time_buffer, BUFFER_LEN*channels);
+			//}
+
+		counter++;
+		embed_iteration++;
+	} //while
 
   //
   // free everything
   // ---------------
 
-  fftw_destroy_plan(ft_forward);
-  fftw_destroy_plan(ft_reverse);
+	for(int i = 0; i < channels; i++){
+		fftw_destroy_plan(ft_forward[i]);
+		fftw_destroy_plan(ft_reverse[i]);
+	}
+	free(ft_forward);
+	free(ft_reverse);
   free(time_buffer);
   fftw_free(freq_buffer);
   free_rand();
